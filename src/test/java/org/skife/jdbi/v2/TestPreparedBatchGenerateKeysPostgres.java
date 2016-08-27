@@ -14,9 +14,11 @@
 package org.skife.jdbi.v2;
 
 import org.junit.*;
+import org.skife.jdbi.v2.exceptions.UnableToExecuteStatementException;
 import org.skife.jdbi.v2.tweak.ResultSetMapper;
 import org.skife.jdbi.v2.util.IntegerColumnMapper;
 
+import java.sql.BatchUpdateException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Arrays;
@@ -41,11 +43,14 @@ public class TestPreparedBatchGenerateKeysPostgres {
     public void setUp() throws Exception {
         h = new DBI("jdbc:postgresql:jdbi_test", "postgres", "").open();
         h.execute("create table something (id serial, name varchar(50), create_time timestamp default now())");
+        h.execute("create function insert_func(varchar(50)) returns void as "
+                 + "'insert into something (name) values ($1);' LANGUAGE SQL");
     }
 
     @After
     public void tearDown() throws Exception {
         h.execute("drop table something");
+        h.execute("drop function insert_func(varchar)");
         h.close();
     }
 
@@ -82,6 +87,24 @@ public class TestPreparedBatchGenerateKeysPostgres {
         assertTrue(ids.get(1).id == 2);
         assertNotNull(ids.get(0).createTime);
         assertNotNull(ids.get(1).createTime);
+    }
+
+    @Test
+    public void testBatchVoidFunctionInvocation() throws SQLException {
+        PreparedBatch batch = h.prepareBatch("select insert_func(?)");
+        batch.add("Brian");
+        batch.add("Thom");
+
+        try {
+          batch.execute();
+        } catch (UnableToExecuteStatementException err) {
+          throw ((BatchUpdateException) err.getCause()).getNextException();
+        }
+
+        List<Something> somethings = h.createQuery("select id, name from something")
+                .map(Something.class)
+                .list();
+        assertEquals(Arrays.asList(new Something(1, "Brian"), new Something(2, "Thom")), somethings);
     }
 
     private static class IdCreateTime {
